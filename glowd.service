@@ -1,0 +1,12 @@
+[Unit]
+Description=glowd - MagicHome LED web controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/glowd --port 5578
+Restart=on-failure
+DynamicUser=yes
+
+[Install]
+WantedBy=multi-user.target

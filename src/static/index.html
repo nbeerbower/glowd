@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>glowd</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --card: #181b22;
+    --card-edge: #262b36;
+    --text: #e8eaf0;
+    --muted: #8b93a5;
+    --accent: #7c8aff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 system-ui, sans-serif;
+    min-height: 100vh;
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 20px 24px;
+    max-width: 720px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 22px; margin: 0; letter-spacing: 0.5px; }
+  h1 span { color: var(--accent); }
+  header button { margin-left: auto; }
+  main { max-width: 720px; margin: 0 auto; padding: 0 24px 48px; display: grid; gap: 20px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--card-edge);
+    border-radius: 14px;
+    padding: 18px 20px;
+    display: grid;
+    gap: 14px;
+  }
+  .card.off { opacity: 0.6; }
+  .card-head { display: flex; align-items: center; gap: 12px; }
+  .dot {
+    width: 26px; height: 26px; border-radius: 50%;
+    border: 2px solid var(--card-edge);
+    box-shadow: 0 0 14px 2px var(--glow, transparent);
+    background: var(--glow, #000);
+    transition: background 0.3s, box-shadow 0.3s;
+  }
+  .card-head .name { font-weight: 600; }
+  .card-head .ip { color: var(--muted); font-size: 13px; }
+  .card-head label { margin-left: auto; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .row .label { color: var(--muted); font-size: 13px; width: 52px; }
+  input[type="color"] {
+    width: 46px; height: 34px; padding: 0; border: none;
+    border-radius: 8px; background: none; cursor: pointer;
+  }
+  .swatch {
+    width: 26px; height: 26px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.15); cursor: pointer; padding: 0;
+  }
+  .swatch:hover { border-color: rgba(255,255,255,0.6); }
+  select, button {
+    background: #21252f; color: var(--text);
+    border: 1px solid var(--card-edge); border-radius: 8px;
+    padding: 7px 12px; font: inherit; cursor: pointer;
+  }
+  button:hover, select:hover { border-color: var(--accent); }
+  input[type="range"] { accent-color: var(--accent); flex: 1; min-width: 120px; }
+  .switch { position: relative; width: 44px; height: 24px; }
+  .switch input { display: none; }
+  .switch .track {
+    position: absolute; inset: 0; border-radius: 12px;
+    background: #2a2f3b; transition: background 0.2s;
+  }
+  .switch .track::after {
+    content: ""; position: absolute; top: 3px; left: 3px;
+    width: 18px; height: 18px; border-radius: 50%;
+    background: #cfd4e0; transition: left 0.2s;
+  }
+  .switch input:checked + .track { background: var(--accent); }
+  .switch input:checked + .track::after { left: 23px; }
+  .status { color: var(--muted); font-size: 13px; }
+  .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>glow<span>d</span></h1>
+  <div class="status" id="status"></div>
+  <button id="rescan">Rescan</button>
+</header>
+<main id="devices"><div class="empty">Looking for lights…</div></main>
+
+<script>
+const SWATCHES = ["#ff1100", "#ff6a00", "#ffb300", "#22cc44", "#00c8c8", "#1155ff", "#8822ff", "#ff2288", "#ffffff"];
+let effects = [];
+let refreshTimer = null;
+
+const $ = (sel, el = document) => el.querySelector(sel);
+const hex = (r, g, b) => "#" + [r, g, b].map(v => v.toString(16).padStart(2, "0")).join("");
+const rgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+
+async function api(path, body) {
+  const res = await fetch(path, body
+    ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+    : undefined);
+  if (!res.ok) throw new Error((await res.json()).error || res.statusText);
+  return res.json();
+}
+
+function card(dev) {
+  const el = document.createElement("div");
+  el.className = "card";
+  el.dataset.ip = dev.ip;
+  const effectOpts = effects.map(e => `<option value="${e}">${e.replaceAll("_", " ")}</option>`).join("");
+  el.innerHTML = `
+    <div class="card-head">
+      <div class="dot"></div>
+      <div><div class="name">${dev.model}</div><div class="ip">${dev.ip}</div></div>
+      <label class="switch"><input type="checkbox" class="power"><span class="track"></span></label>
+    </div>
+    <div class="row">
+      <span class="label">Color</span>
+      <input type="color" class="picker" value="#ff1100">
+      ${SWATCHES.map(c => `<button class="swatch" data-color="${c}" style="background:${c}"></button>`).join("")}
+    </div>
+    <div class="row">
+      <span class="label">Effect</span>
+      <select class="effect"><option value="">— none (solid color) —</option>${effectOpts}</select>
+      <input type="range" class="speed" min="1" max="100" value="50" title="effect speed">
+    </div>`;
+
+  $(".power", el).onchange = e => send(el, "/api/power", { ip: dev.ip, on: e.target.checked });
+  $(".picker", el).onchange = e => setColor(el, dev.ip, e.target.value);
+  el.querySelectorAll(".swatch").forEach(btn => {
+    btn.onclick = () => { $(".picker", el).value = btn.dataset.color; setColor(el, dev.ip, btn.dataset.color); };
+  });
+  $(".effect", el).onchange = e => {
+    if (!e.target.value) return setColor(el, dev.ip, $(".picker", el).value);
+    send(el, "/api/effect", { ip: dev.ip, name: e.target.value, speed: +$(".speed", el).value });
+  };
+  $(".speed", el).onchange = e => {
+    const name = $(".effect", el).value;
+    if (name) send(el, "/api/effect", { ip: dev.ip, name, speed: +e.target.value });
+  };
+  return el;
+}
+
+function setColor(el, ip, hexColor) {
+  const [r, g, b] = rgb(hexColor);
+  $(".effect", el).value = "";
+  send(el, "/api/color", { ip, r, g, b });
+}
+
+async function send(el, path, body) {
+  try {
+    await api(path, body);
+    $("#status").textContent = "";
+    setTimeout(refresh, 300);
+  } catch (err) {
+    $("#status").textContent = err.message;
+  }
+}
+
+function apply(el, dev) {
+  const st = dev.state;
+  if (!st) { el.classList.add("off"); return; }
+  el.classList.toggle("off", !st.on);
+  $(".power", el).checked = st.on;
+  const color = st.on ? hex(st.r, st.g, st.b) : "transparent";
+  el.style.setProperty("--glow", color);
+  // don't fight the user mid-interaction
+  if (!el.contains(document.activeElement)) {
+    if (st.mode === "color") {
+      $(".picker", el).value = hex(st.r, st.g, st.b);
+      $(".effect", el).value = "";
+    } else if (effects.includes(st.mode)) {
+      $(".effect", el).value = st.mode;
+    }
+  }
+}
+
+async function render(devices) {
+  const main = $("#devices");
+  if (!devices.length) {
+    main.innerHTML = '<div class="empty">No lights found. Check they\'re powered and on this network, then hit Rescan.</div>';
+    return;
+  }
+  for (const dev of devices) {
+    let el = main.querySelector(`[data-ip="${dev.ip}"]`);
+    if (!el) {
+      if ($(".empty", main)) main.innerHTML = "";
+      el = card(dev);
+      main.appendChild(el);
+    }
+    apply(el, dev);
+  }
+}
+
+async function refresh() {
+  try {
+    render(await api("/api/devices"));
+  } catch (err) {
+    $("#status").textContent = err.message;
+  }
+}
+
+$("#rescan").onclick = async () => {
+  $("#status").textContent = "scanning…";
+  $("#devices").innerHTML = '<div class="empty">Looking for lights…</div>';
+  try {
+    render(await api("/api/discover", {}));
+    $("#status").textContent = "";
+  } catch (err) {
+    $("#status").textContent = err.message;
+  }
+};
+
+(async () => {
+  effects = await api("/api/effects");
+  await refresh();
+  refreshTimer = setInterval(refresh, 5000);
+})();
+</script>
+</body>
+</html>
