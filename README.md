@@ -36,6 +36,13 @@ sudo systemctl enable --now glowd
 | POST   | `/api/power`    | `{"ip": "...", "on": true}`                 |                                |
 | POST   | `/api/color`    | `{"ip": "...", "r": 255, "g": 17, "b": 0}`  | switches to solid-color mode   |
 | POST   | `/api/effect`   | `{"ip": "...", "name": "red_gradual", "speed": 50}` | speed 1–100 (fastest) |
+| GET    | `/api/colors`   | —                                           | saved palette (hex strings)    |
+| POST   | `/api/colors`   | `{"hex": "#ff8800"}`                        | save a color, returns palette  |
+| POST   | `/api/colors/remove` | `{"hex": "#ff8800"}`                   | forget a color, returns palette |
+
+Saved colors persist to `colors.json` in the state dir — `--state-dir DIR`,
+`$GLOWD_STATE_DIR`, or `~/.local/state/glowd` by default (the systemd unit
+uses `/var/lib/glowd` via `StateDirectory`).
 
 ## Protocol notes
 

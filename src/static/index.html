@@ -64,6 +64,18 @@
     border: 2px solid rgba(255,255,255,0.15); cursor: pointer; padding: 0;
   }
   .swatch:hover { border-color: rgba(255,255,255,0.6); }
+  .saved-swatches { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .saved { position: relative; display: inline-flex; }
+  .saved .del {
+    display: none; position: absolute; top: -7px; right: -7px;
+    width: 16px; height: 16px; padding: 0; border-radius: 50%;
+    background: #444b5a; color: var(--text); border: none;
+    font-size: 11px; line-height: 16px; text-align: center;
+  }
+  .saved:hover .del { display: block; }
+  .saved .del:hover { background: #c0392b; }
+  .save-btn { padding: 3px 10px; border-radius: 13px; font-size: 15px; }
+  .hint { color: var(--muted); font-size: 12px; }
   select, button {
     background: #21252f; color: var(--text);
     border: 1px solid var(--card-edge); border-radius: 8px;
@@ -99,6 +111,7 @@
 <script>
 const SWATCHES = ["#ff1100", "#ff6a00", "#ffb300", "#22cc44", "#00c8c8", "#1155ff", "#8822ff", "#ff2288", "#ffffff"];
 let effects = [];
+let palette = [];
 let refreshTimer = null;
 
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -130,6 +143,11 @@ function card(dev) {
       ${SWATCHES.map(c => `<button class="swatch" data-color="${c}" style="background:${c}"></button>`).join("")}
     </div>
     <div class="row">
+      <span class="label">Saved</span>
+      <span class="saved-swatches"></span>
+      <button class="save-btn" title="Save the current color to your palette">+</button>
+    </div>
+    <div class="row">
       <span class="label">Effect</span>
       <select class="effect"><option value="">— none (solid color) —</option>${effectOpts}</select>
       <input type="range" class="speed" min="1" max="100" value="50" title="effect speed">
@@ -148,7 +166,33 @@ function card(dev) {
     const name = $(".effect", el).value;
     if (name) send(el, "/api/effect", { ip: dev.ip, name, speed: +e.target.value });
   };
+  $(".save-btn", el).onclick = () => editPalette("/api/colors", $(".picker", el).value);
+  el._dev = dev;
+  renderSaved(el, dev);
   return el;
+}
+
+async function editPalette(path, hexColor) {
+  try {
+    palette = await api(path, { hex: hexColor });
+    document.querySelectorAll(".card").forEach(el => renderSaved(el, el._dev));
+  } catch (err) {
+    $("#status").textContent = err.message;
+  }
+}
+
+function renderSaved(el, dev) {
+  const wrap = $(".saved-swatches", el);
+  wrap.innerHTML = palette.length ? "" : '<span class="hint">none yet — pick a color, hit +</span>';
+  for (const c of palette) {
+    const s = document.createElement("span");
+    s.className = "saved";
+    s.innerHTML = `<button class="swatch" style="background:${c}" title="${c}"></button>
+                   <button class="del" title="Forget ${c}">×</button>`;
+    $(".swatch", s).onclick = () => { $(".picker", el).value = c; setColor(el, dev.ip, c); };
+    $(".del", s).onclick = () => editPalette("/api/colors/remove", c);
+    wrap.appendChild(s);
+  }
 }
 
 function setColor(el, ip, hexColor) {
@@ -222,7 +266,7 @@ $("#rescan").onclick = async () => {
 };
 
 (async () => {
-  effects = await api("/api/effects");
+  [effects, palette] = await Promise.all([api("/api/effects"), api("/api/colors")]);
   await refresh();
   refreshTimer = setInterval(refresh, 5000);
 })();

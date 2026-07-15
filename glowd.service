@@ -7,6 +7,8 @@ Wants=network-online.target
 ExecStart=/usr/local/bin/glowd --port 5578
 Restart=on-failure
 DynamicUser=yes
+StateDirectory=glowd
+Environment=GLOWD_STATE_DIR=/var/lib/glowd
 
 [Install]
 WantedBy=multi-user.target

@@ -1,10 +1,12 @@
 mod protocol;
 mod server;
+mod store;
 
 const DEFAULT_PORT: u16 = 5578; // one above the LED control port, easy to remember
 
 fn main() {
     let mut port = DEFAULT_PORT;
+    let mut state_dir = store::default_state_dir();
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -17,10 +19,18 @@ fn main() {
                         std::process::exit(2);
                     });
             }
+            "--state-dir" => {
+                state_dir = args.next().map(Into::into).unwrap_or_else(|| {
+                    eprintln!("--state-dir needs a path");
+                    std::process::exit(2);
+                });
+            }
             "--help" | "-h" => {
                 println!("glowd — self-hosted web controller for MagicHome LED strips");
                 println!();
-                println!("Usage: glowd [--port PORT]   (default {DEFAULT_PORT})");
+                println!("Usage: glowd [--port PORT] [--state-dir DIR]");
+                println!("  --port       listen port (default {DEFAULT_PORT})");
+                println!("  --state-dir  where saved colors live (default $GLOWD_STATE_DIR or ~/.local/state/glowd)");
                 return;
             }
             other => {
@@ -29,5 +39,5 @@ fn main() {
             }
         }
     }
-    server::run(port);
+    server::run(port, state_dir);
 }

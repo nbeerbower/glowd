@@ -1,4 +1,5 @@
 use std::io;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -7,6 +8,7 @@ use serde_json::json;
 use tiny_http::{Header, Method, Request, Response, Server};
 
 use crate::protocol::{self, Device, EFFECTS};
+use crate::store;
 
 const INDEX_HTML: &str = include_str!("static/index.html");
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(3);
@@ -15,6 +17,8 @@ type Resp = Response<io::Cursor<Vec<u8>>>;
 
 struct App {
     devices: Mutex<Vec<Device>>,
+    palette: Mutex<Vec<String>>,
+    state_dir: PathBuf,
 }
 
 #[derive(Deserialize)]
@@ -43,15 +47,30 @@ fn default_speed() -> u8 {
     50
 }
 
-pub fn run(port: u16) {
+#[derive(Deserialize)]
+struct SavedColorReq {
+    hex: String,
+}
+
+/// Accepts "#ff8800" or "ff8800" (any case); returns canonical "#ff8800".
+fn normalize_hex(input: &str) -> Option<String> {
+    let hex = input.trim().trim_start_matches('#').to_lowercase();
+    (hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit())).then(|| format!("#{hex}"))
+}
+
+pub fn run(port: u16, state_dir: PathBuf) {
     let server = Server::http(("0.0.0.0", port)).unwrap_or_else(|e| {
         eprintln!("failed to bind port {port}: {e}");
         std::process::exit(1);
     });
     println!("glowd listening on http://0.0.0.0:{port}");
 
+    let palette = store::load_palette(&state_dir);
+    println!("state dir {} ({} saved colors)", state_dir.display(), palette.len());
     let app = App {
         devices: Mutex::new(Vec::new()),
+        palette: Mutex::new(palette),
+        state_dir,
     };
     match protocol::discover(DISCOVERY_TIMEOUT) {
         Ok(found) => {
@@ -80,6 +99,15 @@ fn handle(app: &App, mut request: Request) -> io::Result<()> {
             ok_json(json!(names))
         }
         (Method::Post, "/api/discover") => rediscover(app),
+        (Method::Get, "/api/colors") => ok_json(json!(*app.palette.lock().unwrap())),
+        (Method::Post, "/api/colors") => edit_palette(app, &mut request, |palette, hex| {
+            if !palette.contains(&hex) {
+                palette.push(hex);
+            }
+        }),
+        (Method::Post, "/api/colors/remove") => edit_palette(app, &mut request, |palette, hex| {
+            palette.retain(|c| *c != hex);
+        }),
         (Method::Post, "/api/power") => with_body(&mut request, |req: PowerReq| {
             protocol::set_power(&req.ip, req.on)
         }),
@@ -114,6 +142,24 @@ fn rediscover(app: &App) -> Resp {
         }
         Err(e) => error_json(502, &format!("discovery failed: {e}")),
     }
+}
+
+/// Apply a mutation to the saved palette, persist it, and return the new list.
+fn edit_palette(app: &App, request: &mut Request, mutate: impl FnOnce(&mut Vec<String>, String)) -> Resp {
+    let parsed: Result<SavedColorReq, _> = serde_json::from_reader(request.as_reader());
+    let req = match parsed {
+        Ok(req) => req,
+        Err(e) => return error_json(400, &format!("bad request: {e}")),
+    };
+    let Some(hex) = normalize_hex(&req.hex) else {
+        return error_json(400, "expected a hex color like #ff8800");
+    };
+    let mut palette = app.palette.lock().unwrap();
+    mutate(&mut palette, hex);
+    if let Err(e) = store::save_palette(&app.state_dir, &palette) {
+        return error_json(500, &format!("failed to save palette: {e}"));
+    }
+    ok_json(json!(*palette))
 }
 
 /// Parse the JSON body, run the device command, and map errors to HTTP codes.
