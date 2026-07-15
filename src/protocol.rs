@@ -80,6 +80,19 @@ fn send(ip: &str, cmd: &[u8], reply_len: usize) -> io::Result<Vec<u8>> {
     Ok(reply)
 }
 
+/// Parse a discovery reply of the form "ip,mac,model".
+fn parse_discovery_reply(reply: &str) -> Option<Device> {
+    let parts: Vec<&str> = reply.trim().split(',').collect();
+    let [ip, mac, model] = parts[..] else {
+        return None;
+    };
+    Some(Device {
+        ip: ip.to_string(),
+        mac: mac.to_string(),
+        model: model.to_string(),
+    })
+}
+
 /// Broadcast a discovery probe and collect replies until `timeout` elapses.
 pub fn discover(timeout: Duration) -> io::Result<Vec<Device>> {
     let sock = UdpSocket::bind("0.0.0.0:0")?;
@@ -98,22 +111,17 @@ pub fn discover(timeout: Duration) -> io::Result<Vec<Device>> {
             continue; // our own broadcast echoed back
         }
         let reply = String::from_utf8_lossy(&buf[..n]);
-        let parts: Vec<&str> = reply.trim().split(',').collect();
-        if let [ip, mac, model] = parts[..] {
-            if !devices.iter().any(|d| d.ip == ip) {
-                devices.push(Device {
-                    ip: ip.to_string(),
-                    mac: mac.to_string(),
-                    model: model.to_string(),
-                });
+        if let Some(device) = parse_discovery_reply(&reply) {
+            if !devices.iter().any(|d| d.ip == device.ip) {
+                devices.push(device);
             }
         }
     }
     Ok(devices)
 }
 
-pub fn state(ip: &str) -> io::Result<State> {
-    let resp = send(ip, &[0x81, 0x8A, 0x8B], 14)?;
+/// Decode the 14-byte reply to a state query.
+fn parse_state(resp: &[u8]) -> State {
     let mode = match resp[3] {
         0x61 => "color".to_string(),
         byte => EFFECTS
@@ -122,14 +130,19 @@ pub fn state(ip: &str) -> io::Result<State> {
             .map(|(name, _)| name.to_string())
             .unwrap_or_else(|| format!("0x{byte:02x}")),
     };
-    Ok(State {
+    State {
         on: resp[2] == 0x23,
         mode,
         r: resp[6],
         g: resp[7],
         b: resp[8],
         speed: resp[5],
-    })
+    }
+}
+
+pub fn state(ip: &str) -> io::Result<State> {
+    let resp = send(ip, &[0x81, 0x8A, 0x8B], 14)?;
+    Ok(parse_state(&resp))
 }
 
 pub fn set_power(ip: &str, on: bool) -> io::Result<()> {
@@ -142,14 +155,78 @@ pub fn set_color(ip: &str, r: u8, g: u8, b: u8) -> io::Result<()> {
     Ok(())
 }
 
+/// Map a 1-100 percentage (fastest = 100) onto the protocol's speed byte
+/// (0x01 fastest, 0x1F slowest).
+fn speed_byte(speed_pct: u8) -> u8 {
+    let pct = u32::from(speed_pct.clamp(1, 100));
+    (0x1F - (pct * 0x1E) / 100) as u8
+}
+
 /// `speed_pct`: 1 (slowest) .. 100 (fastest).
 pub fn set_effect(ip: &str, name: &str, speed_pct: u8) -> io::Result<()> {
     let (_, code) = EFFECTS
         .iter()
         .find(|(n, _)| *n == name)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unknown effect"))?;
-    let pct = speed_pct.clamp(1, 100) as u32;
-    let speed = (0x1F - (pct * 0x1E) / 100) as u8; // protocol: 0x01 fastest, 0x1F slowest
-    send(ip, &[0x61, *code, speed, 0x0F], 0)?;
+    send(ip, &[0x61, *code, speed_byte(speed_pct), 0x0F], 0)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checksum_is_truncated_byte_sum() {
+        // 0x81 + 0x8A + 0x8B = 0x196 -> 0x96
+        assert_eq!(
+            with_checksum(&[0x81, 0x8A, 0x8B]),
+            vec![0x81, 0x8A, 0x8B, 0x96]
+        );
+        assert_eq!(with_checksum(&[]), vec![0x00]);
+    }
+
+    #[test]
+    fn parses_real_state_reply() {
+        // Captured from an AK001-ZJ200: on, static color (255, 17, 0).
+        let resp = [
+            0x81, 0x33, 0x23, 0x61, 0x01, 0x10, 0xFF, 0x11, 0x00, 0x00, 0x04, 0x00, 0x00, 0x5D,
+        ];
+        let st = parse_state(&resp);
+        assert!(st.on);
+        assert_eq!(st.mode, "color");
+        assert_eq!((st.r, st.g, st.b), (255, 17, 0));
+        assert_eq!(st.speed, 16);
+    }
+
+    #[test]
+    fn parses_effect_and_off_states() {
+        let mut resp = [0u8; 14];
+        resp[2] = 0x24; // off
+        resp[3] = 0x25; // seven_color_cross_fade
+        let st = parse_state(&resp);
+        assert!(!st.on);
+        assert_eq!(st.mode, "seven_color_cross_fade");
+
+        resp[3] = 0x99; // unknown mode byte
+        assert_eq!(parse_state(&resp).mode, "0x99");
+    }
+
+    #[test]
+    fn parses_discovery_replies() {
+        let dev = parse_discovery_reply("192.168.1.102,60019496E1B0,AK001-ZJ200").unwrap();
+        assert_eq!(dev.ip, "192.168.1.102");
+        assert_eq!(dev.mac, "60019496E1B0");
+        assert_eq!(dev.model, "AK001-ZJ200");
+        assert!(parse_discovery_reply("garbage").is_none());
+        assert!(parse_discovery_reply("a,b,c,d").is_none());
+    }
+
+    #[test]
+    fn speed_byte_covers_full_protocol_range() {
+        assert_eq!(speed_byte(100), 0x01); // fastest
+        assert_eq!(speed_byte(1), 0x1F); // slowest
+        assert_eq!(speed_byte(0), 0x1F); // clamped up
+        assert_eq!(speed_byte(255), 0x01); // clamped down
+    }
 }

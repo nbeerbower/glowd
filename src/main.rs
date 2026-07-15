@@ -1,4 +1,5 @@
 mod protocol;
+mod schedule;
 mod server;
 mod store;
 
@@ -11,13 +12,10 @@ fn main() {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--port" | "-p" => {
-                port = args
-                    .next()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or_else(|| {
-                        eprintln!("--port needs a number (1-65535)");
-                        std::process::exit(2);
-                    });
+                port = args.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| {
+                    eprintln!("--port needs a number (1-65535)");
+                    std::process::exit(2);
+                });
             }
             "--state-dir" => {
                 state_dir = args.next().map(Into::into).unwrap_or_else(|| {

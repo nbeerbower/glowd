@@ -39,10 +39,30 @@ sudo systemctl enable --now glowd
 | GET    | `/api/colors`   | —                                           | saved palette (hex strings)    |
 | POST   | `/api/colors`   | `{"hex": "#ff8800"}`                        | save a color, returns palette  |
 | POST   | `/api/colors/remove` | `{"hex": "#ff8800"}`                   | forget a color, returns palette |
+| POST   | `/api/name`     | `{"mac": "...", "name": "office strip"}`    | nickname a device (empty name clears) |
+| GET    | `/api/schedules` | —                                          | list schedules                 |
+| POST   | `/api/schedules` | `{"time": "22:30", "days": [1,2,3,4,5], "action": "off", "mac": null}` | add; `days` empty = daily, `mac` null = all devices, `action` on/off/color (+`hex`) |
+| POST   | `/api/schedules/remove` | `{"id": 3}`                         | delete a schedule              |
+| POST   | `/api/schedules/toggle` | `{"id": 3}`                         | enable/disable a schedule      |
 
-Saved colors persist to `colors.json` in the state dir — `--state-dir DIR`,
-`$GLOWD_STATE_DIR`, or `~/.local/state/glowd` by default (the systemd unit
-uses `/var/lib/glowd` via `StateDirectory`).
+Saved colors, device nicknames, and schedules persist as JSON files in the
+state dir — `--state-dir DIR`, `$GLOWD_STATE_DIR`, or `~/.local/state/glowd`
+by default (the systemd unit uses `/var/lib/glowd` via `StateDirectory`).
+
+Schedules fire on the server's local time with per-minute resolution; a
+schedule with no days set runs every day. Nicknames key off the device MAC,
+so they survive DHCP handing out a new IP.
+
+## Development
+
+```sh
+cargo test       # unit tests (protocol parsing, schedule logic, storage)
+cargo clippy --all-targets -- -D warnings
+cargo fmt
+```
+
+CI runs fmt/clippy/test/build on every push; pushing a `v*` tag publishes a
+GitHub release with the Linux binary.
 
 ## Protocol notes
 

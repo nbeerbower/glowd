@@ -32,7 +32,7 @@
   h1 { font-size: 22px; margin: 0; letter-spacing: 0.5px; }
   h1 span { color: var(--accent); }
   header button { margin-left: auto; }
-  main { max-width: 720px; margin: 0 auto; padding: 0 24px 48px; display: grid; gap: 20px; }
+  main { max-width: 720px; margin: 0 auto; padding: 0 24px 24px; display: grid; gap: 20px; }
   .card {
     background: var(--card);
     border: 1px solid var(--card-edge);
@@ -76,6 +76,27 @@
   .saved .del:hover { background: #c0392b; }
   .save-btn { padding: 3px 10px; border-radius: 13px; font-size: 15px; }
   .hint { color: var(--muted); font-size: 12px; }
+  .edit-name {
+    background: none; border: none; padding: 0 4px; font-size: 12px;
+    color: var(--muted); cursor: pointer;
+  }
+  .edit-name:hover { color: var(--text); }
+  .name-input {
+    background: #21252f; color: var(--text); font: inherit; font-weight: 600;
+    border: 1px solid var(--accent); border-radius: 6px; padding: 2px 6px; width: 160px;
+  }
+  .section-title { font-weight: 600; }
+  .day {
+    padding: 4px 8px; font-size: 12px; border-radius: 6px;
+    color: var(--muted);
+  }
+  .day.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .sched-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
+  .sched-row.disabled > .sched-desc { opacity: 0.45; text-decoration: line-through; }
+  .sched-desc { flex: 1; }
+  .sched-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+  .sched-del { background: none; border: none; color: var(--muted); font-size: 16px; padding: 0 6px; }
+  .sched-del:hover { color: #e74c3c; }
   select, button {
     background: #21252f; color: var(--text);
     border: 1px solid var(--card-edge); border-radius: 8px;
@@ -107,6 +128,27 @@
   <button id="rescan">Rescan</button>
 </header>
 <main id="devices"><div class="empty">Looking for lights…</div></main>
+<main>
+  <div class="card">
+    <div class="card-head"><div class="section-title">Schedules</div></div>
+    <div id="sched-list"><span class="hint">no schedules yet</span></div>
+    <div class="row">
+      <input type="time" id="sched-time" value="22:00">
+      <span id="sched-days"></span>
+    </div>
+    <div class="row">
+      <select id="sched-action">
+        <option value="on">turn on</option>
+        <option value="off">turn off</option>
+        <option value="color">set color</option>
+      </select>
+      <input type="color" id="sched-color" value="#ff1100" hidden>
+      <select id="sched-target"><option value="">all lights</option></select>
+      <button id="sched-add">Add schedule</button>
+    </div>
+    <div class="hint">No days selected = every day. Times are the server's local time.</div>
+  </div>
+</main>
 
 <script>
 const SWATCHES = ["#ff1100", "#ff6a00", "#ffb300", "#22cc44", "#00c8c8", "#1155ff", "#8822ff", "#ff2288", "#ffffff"];
@@ -134,7 +176,7 @@ function card(dev) {
   el.innerHTML = `
     <div class="card-head">
       <div class="dot"></div>
-      <div><div class="name">${dev.model}</div><div class="ip">${dev.ip}</div></div>
+      <div><div class="name"><span class="name-text"></span><button class="edit-name" title="Rename">✎</button></div><div class="ip">${dev.ip} · ${dev.model}</div></div>
       <label class="switch"><input type="checkbox" class="power"><span class="track"></span></label>
     </div>
     <div class="row">
@@ -167,9 +209,40 @@ function card(dev) {
     if (name) send(el, "/api/effect", { ip: dev.ip, name, speed: +e.target.value });
   };
   $(".save-btn", el).onclick = () => editPalette("/api/colors", $(".picker", el).value);
+  $(".name-text", el).textContent = dev.name;
+  $(".edit-name", el).onclick = () => editName(el, dev);
   el._dev = dev;
   renderSaved(el, dev);
   return el;
+}
+
+function editName(el, dev) {
+  const span = $(".name-text", el);
+  const input = document.createElement("input");
+  input.className = "name-input";
+  input.value = span.textContent;
+  span.replaceWith(input);
+  input.focus();
+  input.select();
+  let finished = false;
+  const done = async save => {
+    if (finished) return;
+    finished = true;
+    if (save) {
+      try {
+        await api("/api/name", { mac: dev.mac, name: input.value });
+      } catch (err) {
+        $("#status").textContent = err.message;
+      }
+    }
+    input.replaceWith(span);
+    refresh();
+  };
+  input.onkeydown = e => {
+    if (e.key === "Enter") done(true);
+    if (e.key === "Escape") done(false);
+  };
+  input.onblur = () => done(true);
 }
 
 async function editPalette(path, hexColor) {
@@ -212,6 +285,9 @@ async function send(el, path, body) {
 }
 
 function apply(el, dev) {
+  el._dev = dev;
+  const nameText = $(".name-text", el);
+  if (nameText) nameText.textContent = dev.name; // absent mid-rename
   const st = dev.state;
   if (!st) { el.classList.add("off"); return; }
   el.classList.toggle("off", !st.on);
@@ -248,9 +324,101 @@ async function render(devices) {
 
 async function refresh() {
   try {
-    render(await api("/api/devices"));
+    const devices = await api("/api/devices");
+    knownDevices = devices;
+    render(devices);
+    renderTargets();
   } catch (err) {
     $("#status").textContent = err.message;
+  }
+}
+
+// ---- schedules ----
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+let schedules = [];
+let knownDevices = [];
+
+DAY_NAMES.forEach((d, i) => {
+  const b = document.createElement("button");
+  b.textContent = d;
+  b.className = "day";
+  b.dataset.day = i;
+  b.onclick = () => b.classList.toggle("active");
+  $("#sched-days").appendChild(b);
+});
+
+$("#sched-action").onchange = e => { $("#sched-color").hidden = e.target.value !== "color"; };
+
+$("#sched-add").onclick = () => {
+  const action = $("#sched-action").value;
+  const body = {
+    time: $("#sched-time").value,
+    days: [...document.querySelectorAll("#sched-days .day.active")].map(b => +b.dataset.day),
+    action,
+    mac: $("#sched-target").value || null,
+  };
+  if (action === "color") body.hex = $("#sched-color").value;
+  editSchedules("/api/schedules", body);
+};
+
+async function editSchedules(path, body) {
+  try {
+    schedules = await api(path, body);
+    renderSchedules();
+    $("#status").textContent = "";
+  } catch (err) {
+    $("#status").textContent = err.message;
+  }
+}
+
+function renderTargets() {
+  const sel = $("#sched-target");
+  const current = sel.value;
+  sel.innerHTML = "";
+  sel.append(new Option("all lights", ""));
+  knownDevices.forEach(d => sel.append(new Option(d.name, d.mac)));
+  if ([...sel.options].some(o => o.value === current)) sel.value = current;
+  renderSchedules(); // device names may have changed
+}
+
+function renderSchedules() {
+  const list = $("#sched-list");
+  list.innerHTML = schedules.length ? "" : '<span class="hint">no schedules yet</span>';
+  for (const s of schedules) {
+    const row = document.createElement("div");
+    row.className = "sched-row" + (s.enabled ? "" : " disabled");
+
+    const desc = document.createElement("span");
+    desc.className = "sched-desc";
+    if (s.action === "color" && s.hex) {
+      const dot = document.createElement("span");
+      dot.className = "sched-dot";
+      dot.style.background = s.hex;
+      desc.appendChild(dot);
+    }
+    const days = s.days.length ? s.days.map(d => DAY_NAMES[d]).join(" ") : "every day";
+    const what = s.action === "color" ? `color ${s.hex}` : `turn ${s.action}`;
+    const device = knownDevices.find(d => d.mac === s.mac);
+    const target = s.mac ? (device ? device.name : s.mac) : "all lights";
+    desc.appendChild(document.createTextNode(`${s.time} · ${days} · ${what} · ${target}`));
+    row.appendChild(desc);
+
+    const toggle = document.createElement("label");
+    toggle.className = "switch";
+    toggle.title = s.enabled ? "Disable" : "Enable";
+    toggle.innerHTML = '<input type="checkbox"><span class="track"></span>';
+    $("input", toggle).checked = s.enabled;
+    $("input", toggle).onchange = () => editSchedules("/api/schedules/toggle", { id: s.id });
+    row.appendChild(toggle);
+
+    const del = document.createElement("button");
+    del.className = "sched-del";
+    del.textContent = "×";
+    del.title = "Delete schedule";
+    del.onclick = () => editSchedules("/api/schedules/remove", { id: s.id });
+    row.appendChild(del);
+
+    list.appendChild(row);
   }
 }
 
@@ -266,8 +434,11 @@ $("#rescan").onclick = async () => {
 };
 
 (async () => {
-  [effects, palette] = await Promise.all([api("/api/effects"), api("/api/colors")]);
+  [effects, palette, schedules] = await Promise.all([
+    api("/api/effects"), api("/api/colors"), api("/api/schedules"),
+  ]);
   await refresh();
+  renderSchedules();
   refreshTimer = setInterval(refresh, 5000);
 })();
 </script>
